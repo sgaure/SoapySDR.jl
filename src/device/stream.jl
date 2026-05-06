@@ -324,42 +324,50 @@ function Base.write(
         throw(ArgumentError("Must provide buffers for every channel in stream!"))
     end
 
-    GC.@preserve buffers while total_nwritten < samples_to_write
-        buff_ptrs = pointer(map(b -> pointer(b, total_nwritten + 1), buffers))
-        out_flags = Ref{Cint}(0)
-        nwritten = SoapySDRDevice_writeStream(
-            s.d,
-            s,
-            buff_ptrs,
-            samples_to_write - total_nwritten,
-            out_flags,
-            0,
-            timeout_us,
-        )
+    @no_escape begin
+        mp = @alloc Ptr{Cvoid} length(buffers)
+        out_flags = Ref(@alloc(Cint, 1), 1)
+        buff_ptrs = pointer(mp)
+        GC.@preserve buffers begin
+            getout = false
+            while total_nwritten < samples_to_write && !getout
+                mp .= pointer.(buffers, total_nwritten + 1)
+                nwritten = SoapySDRDevice_writeStream(
+                    s.d,
+                    s,
+                    buff_ptrs,
+                    samples_to_write - total_nwritten,
+                    out_flags,
+                    0,
+                    timeout_us,
+                )
 
-        if flags isa Ref
-            flags[] |= out_flags[]
-        end
+                if flags isa Ref
+                    flags[] |= out_flags[]
+                end
 
-        if nwritten < 0
-            if throw_error
-                throw(SoapySDRDeviceError(nwritten, error_to_string(nwritten)))
+                if nwritten < 0
+                    if throw_error
+                        throw(SoapySDRDeviceError(nwritten, error_to_string(nwritten)))
+                    end
+                else
+                    total_nwritten += nwritten
+                end
+
+                if time() > t_start + timeout_s
+                    # We've timed out, return early and warn.  Something is probably wrong.
+                    @warn(
+                        "writeStream timeout!",
+                        timeout = timeout_s,
+                        total_nwritten,
+                        samples_to_write,
+                        flags = join(flags_to_set(out_flags[]), ","),
+                    )
+                    getout = true
+                end
             end
-        else
-            total_nwritten += nwritten
-        end
-
-        if time() > t_start + timeout_s
-            # We've timed out, return early and warn.  Something is probably wrong.
-            @warn(
-                "writeStream timeout!",
-                timeout = timeout_s,
-                total_nwritten,
-                samples_to_write,
-                flags = join(flags_to_set(out_flags[]), ","),
-            )
-            return buffers
         end
     end
+
     return buffers
 end

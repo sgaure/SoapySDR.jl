@@ -11,6 +11,8 @@ using Unitful.DefaultSymbols
 const dB = u"dB"
 const GC = Base.GC
 
+using Bumper
+
 export @u_str
 
 # auto-generated C library wrappers
